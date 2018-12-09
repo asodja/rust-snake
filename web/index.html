@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title></title>
+    <style>
+    html, body {
+        height: 100%;
+        margin: 0;
+    }
+
+    body {
+        background: black;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    canvas {
+        border: 1px solid white;
+    }
+    </style>
+</head>
+<body>
+<canvas width="600" height="600" id="game">
+</canvas>
+<script>
+var canvas = document.getElementById('game');
+canvas.width = 1024;
+canvas.height = 640;
+var context = canvas.getContext('2d');
+
+class Snake {
+    constructor(id, parts, isClient) {
+        this.id = id;
+        this.parts = parts;
+        this.serverX = parts[0].x;
+        this.serverY = parts[0].y;
+        this.serverTail = {'x': parts[0].x, 'y': parts[0].y};
+        this.predictedX = parts[0].x;
+        this.predictedY = parts[0].y;
+        this.angle = 0;
+        this.wantedAngle = 0;
+        this.speed = 189.0 / 1000.0;
+        this.angularSpeedPerMs = 7.0125 / 1000.0;
+        this.shooting = false;
+        this.radius = 8;
+        // Defines if this snake is for this
+        // client or some other player
+        this.isClient = isClient;
+        this.i = 0;
+    }
+
+    update(deltaTime) {
+        var rotationAmount = this.angularSpeedPerMs * deltaTime;
+        this.wantedAngle = normalizeAngleZeroTwoTimesPi(this.wantedAngle);
+        if (this.wantedAngle != this.angle) {
+            var angleDifference = normalizeAnglePlusMinusPi(this.wantedAngle - this.angle);
+            if (Math.abs(angleDifference) < rotationAmount) {
+                this.angle = this.wantedAngle
+            } else if (angleDifference > 0) {
+                this.angle += rotationAmount;
+            } else {
+                this.angle -= rotationAmount;
+            }
+        }
+        
+        this.parts.unshift({'x': this.head().x, 'y': this.head().y});
+        this.parts.splice(-1, 1);
+        this.angle = normalizeAngleZeroTwoTimesPi(this.angle);
+        this.head().x += Math.cos(this.angle) * this.speed * deltaTime;
+        this.head().y += Math.sin(this.angle) * this.speed * deltaTime;
+        if (this.isClient) {
+            this.predictedX += Math.cos(this.angle) * this.speed * deltaTime;
+            this.predictedY += Math.sin(this.angle) * this.speed * deltaTime;
+            this.head().x = lerp(this.head().x, this.predictedX, 0.01);
+            this.head().y = lerp(this.head().y, this.predictedY, 0.01);
+        } else {
+            this.head().x = lerp(this.head().x, this.serverX, 0.01);
+            this.head().y = lerp(this.head().y, this.serverY, 0.01);
+        }
+    }
+    
+    head() {
+        return this.parts[0];
+    }
+
+    draw(context, debug) {
+        for (var i = this.parts.length - 1; i >= 0; i--) {
+            context.beginPath();
+            context.arc(this.parts[i].x, this.parts[i].y, this.radius, 0, 2 * Math.PI, false);
+            context.fillStyle = 'green';
+            context.fill();
+            if (i == 0) {
+                context.lineWidth = 2;
+                context.strokeStyle = '#003300';
+                context.stroke();
+            }
+            
+        }
+
+        if (debug) {
+            context.beginPath();
+            context.arc(this.serverX, this.serverY, this.radius, 0, 2 * Math.PI, false);
+            context.fillStyle = 'yellow';
+            context.fill();
+
+            context.beginPath();
+            context.arc(this.serverTail.x, this.serverTail.y, this.radius, 0, 2 * Math.PI, false);
+            context.fillStyle = 'yellow';
+            context.fill();
+
+            if (this.isClient) {
+                context.beginPath();
+                context.arc(this.predictedX, this.predictedY, this.radius, 0, 2 * Math.PI, false);
+                context.fillStyle = 'blue';
+                context.fill();
+            }
+        }
+    }
+
+    setServerPosition(x, y, tailX, tailY) {
+        this.serverX = x;
+        this.serverY = y;
+        this.serverTail = {'x': tailX, 'y': tailY};
+        if (this.isClient) {
+            this.predictedX = this.serverX + Math.cos(this.angle) * (latency.value / 2.0);
+            this.predictedY = this.serverY + Math.sin(this.angle) * (latency.value / 2.0);
+        }
+    }
+
+    setServerAngle(angle) {
+        // TODO predict client angle
+        if (!this.isClient) {
+            this.angle = angle;
+        }
+    }
+
+    setServerWantedAngle(angle) {
+        // TODO predict client wanted angle
+        if (!this.isClient) {
+            this.wantedAngle = angle;
+        }
+    }
+
+    setServerSpeed(angle) {
+        // TODO predict client speed
+        this.speed = speed;
+    }
+
+
+}
+
+class Packet {
+    constructor(data) {
+        this.buffer = new Uint8Array(data);
+        this.type = String.fromCharCode(this.buffer[0]);
+        this.position = 1;
+        this.length = this.buffer.length;
+    }
+
+    readUint8() {
+        return this.buffer[this.position++] & 0xFF;
+    }
+
+    readUint16() {
+        return ((this.buffer[this.position++] & 0xFF) << 8) | (this.buffer[this.position++] & 0xFF);
+    }
+
+    readUint8Angle() {
+        return this.readUint8() * 2 * Math.PI / 256.0;
+    }
+
+    readUint16At(position) {
+        return ((this.buffer[position++] & 0xFF) << 8) | (this.buffer[position] & 0xFF);
+    }
+
+}
+
+function toRadians(angle) {
+    return angle * (Math.PI / 180.0);
+}
+
+// Normalize angle to [0, 2 * Pi)
+function normalizeAngleZeroTwoTimesPi(angle) {
+    return angle - 2.0 * Math.PI * Math.floor(angle / (2.0 * Math.PI));
+}
+
+// Normalize angle to [-Pi, Pi]
+function normalizeAnglePlusMinusPi(angle) {
+    return angle - 2.0 * Math.PI * Math.floor((angle + Math.PI) / (2.0 * Math.PI))
+}
+
+function distance(x1, y1, x2, y2) {
+    return Math.sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));
+}
+
+function lerp(a, b, f) {
+    return a + f * (b - a);
+}
+
+var latency = {
+    'value': 0.0,
+    'values': [],
+    'lastPingMs': 0,
+    'lastPongMs': 0,
+    'receivedPong': true
+}
+var automode = false;
+var debug = false;
+var keyState = {};
+var snakes = {};
+var clientId = undefined;
+var wsOpened = false;
+var ws = new WebSocket("ws://localhost:8081");
+ws.binaryType = 'arraybuffer';
+ws.onopen = function() {
+    console.log("On open!");
+};
+
+ws.onmessage = function (evt) {
+    var packet = new Packet(evt.data);
+    if (packet.type == 'a') {
+        canvas.width = packet.readUint16();
+        canvas.height = packet.readUint16();
+        var protocol = packet.readUint8();
+        clientId = packet.readUint16();
+        console.log("Sending init! Server protocol " + protocol + ". Given snake id: " + clientId);
+        ws.send(new Uint8Array([115, 0, 0]).buffer);
+        wsOpened = true;
+    } else if (packet.type == 'g') {
+        var id = packet.readUint16();
+        if (id in snakes) {
+            snakes[id].setServerPosition(packet.readUint16(), packet.readUint16(), packet.readUint16(), packet.readUint16());
+        } else {
+            var head = {'x': packet.readUint16(), 'y': packet.readUint16()};
+            var tail = {'x': packet.readUint16(), 'y': packet.readUint16()};
+            var parts = [head];
+            for (var i = 1; i < 14; i++) {
+                parts.push({
+                    'x': head.x - i * Math.cos(0) * 189 / 1000.0 * 16.0,
+                    'y': head.x - i * Math.sin(0) * 189 / 1000.0 * 16.0
+                });
+            }
+            parts.push(tail);
+            snakes[id] = new Snake(id, parts, id == clientId);
+        }
+    } else if (packet.type == 'e' && packet.length == 4) {
+        var id = packet.readUint16();
+        snakes[id].setServerAngle(packet.readUint8Angle());
+    } else if (packet.type == 'e' && packet.length == 5) {
+        var id = packet.readUint16();
+        snakes[id].setServerAngle(packet.readUint8Angle());
+        snakes[id].setServerSpeed(packet.readUint8());
+    } else if (packet.type == 'e' && packet.length == 6) {
+        var id = packet.readUint16();
+        snakes[id].setServerAngle(packet.readUint8Angle());
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+        snakes[id].setServerSpeed(packet.readUint8());
+    } else if (packet.type == 'E' && packet.length == 4) {
+        var id = packet.readUint16();
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+    } else if (packet.type == 'E' && packet.length == 5)  {
+        var id = packet.readUint16();
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+        snakes[id].setServerSpeed(packet.readUint8());
+    } else if (packet.type == '3' && packet.length == 4) {
+        var id = packet.readUint16();
+        snakes[id].setServerSpeed(packet.readUint8());
+    } else if (packet.type == '3' && packet.length == 5) {
+        var id = packet.readUint16();
+        snakes[id].setServerAngle(packet.readUint8Angle());
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+    } else if (packet.type == '4' && packet.length == 4) {
+        var id = packet.readUint16();
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+    } else if (packet.type == '4' && packet.length == 5) {
+        var id = packet.readUint16();
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+        snakes[id].setServerSpeed(packet.readUint8());
+    } else if (packet.type == '4' && packet.length == 6) {
+        var id = packet.readUint16();
+        snakes[id].setServerAngle(packet.readUint8Angle());
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+        snakes[id].setServerSpeed(packet.readUint8());
+    } else if (packet.type == '5' && packet.length == 4) {
+        var id = packet.readUint16();
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+    } else if (packet.type == '5' && packet.length == 5) {
+        var id = packet.readUint16();
+        snakes[id].setServerAngle(packet.readUint8Angle());
+        snakes[id].setServerWantedAngle(packet.readUint8Angle());
+    } else if (packet.type == 's') {
+        var id = packet.readUint16();
+        delete snakes[id];
+        if (id == clientId) {
+            context.fillStyle = 'white';
+            context.font="20px Arial";
+            context.fillText("You died, refresh browser or press enter to respawn...", canvas.width / 2 - 225, canvas.height / 2);
+            ws.close();
+        } else {
+            console.log("Snake with id: " + id + " died.");
+        }
+    } else if (packet.type == 'p') {
+        var now = new Date().getTime();
+        latency.receivedPong = true;
+        latency.lastPongMs = now;
+        latency.value = 0.0;
+        latency.values.push(latency.lastPongMs - latency.lastPingMs);
+        latency.values = latency.values.slice(Math.max(latency.values.length -  4, 0));
+        for (id in latency.values) {
+            latency.value += latency.values[id];
+        }
+        latency.value = latency.value / latency.values.length;
+    }
+};
+
+ws.onclose = function() {
+    console.log("Connection is closed...");
+    wsOpened = false;
+};
+
+var gameLoop = {};
+gameLoop.update = function() {
+    if (!wsOpened) {
+        return;
+    }
+
+    var clientSnake = snakes[clientId];
+    gameLoop.handleInput(clientSnake);
+    context.clearRect(0,0,canvas.width,canvas.height);
+    gameLoop.updateAndDrawSnakes();
+
+    gameLoop.sendPingToServer();
+    gameLoop.printPing(10, 50);
+    gameLoop.printHelp(10, 70);
+}
+
+gameLoop.sendPingToServer = function() {
+    var now = new Date().getTime();
+    if (latency.receivedPong && now - latency.lastPongMs > 250.0) {
+        latency.receivedPong = false;
+        latency.lastPingMs = now;
+        ws.send(new Uint8Array([251]).buffer);
+    }
+}
+
+gameLoop.updateAndDrawSnakes = function() {
+    for (id in snakes) {
+        snakes[id].update(gameLoop.delta);
+        snakes[id].draw(context, debug);
+    }
+}
+
+gameLoop.printPing = function(x, y) {
+    context.fillStyle = 'white';
+    context.fillText("ping: " + latency.value, x, y);
+}
+
+gameLoop.printHelp = function(x, y) {
+    var helpText = ["Left arrow - turn left", "Right arrow - turn right", "Enter - reload",
+        "A - Enable/Disable Automode", "D - Enable/Disable Debug"];
+    context.fillStyle = 'white';
+    for (var i in  helpText) {
+        context.fillText(helpText[i], x, y + i * 15);
+    }
+}
+
+gameLoop._frame = function() {
+    gameLoop.now = Date.now();
+    gameLoop.delta = gameLoop.now - gameLoop.then;
+    gameLoop.deltaTime = gameLoop.delta / 1000; // Converts to seconds (optional)
+    gameLoop.then = gameLoop.now;
+    gameLoop.update();
+    gameLoop.loop();
+}
+
+gameLoop.loop = function() {
+    gameLoop.animationFrameLoop = window.requestAnimationFrame(gameLoop._frame);
+};
+
+gameLoop.pause = function() {
+	window.cancelAnimationFrame(gameLoop.animationFrameLoop);
+};
+
+gameLoop.resume = function() {
+	gameLoop.then = Date.now();
+	gameLoop.loop();
+};
+
+gameLoop.handleInput = function(clientSnake) {
+    if (!clientSnake) {
+        return;
+    }
+    if (automode || keyState[37] || keyState[39]) {
+        var turnRight = keyState[39];
+        var rotationAmount = turnRight ? 0.11 : -0.11;
+        var wantedAngle = normalizeAngleZeroTwoTimesPi(clientSnake.wantedAngle + rotationAmount);
+        clientSnake.wantedAngle = wantedAngle;
+        wantedAngle = wantedAngle / (2 * Math.PI) * 250.0;
+        ws.send(new Uint8Array([wantedAngle]).buffer);
+    }
+}
+
+window.addEventListener('keydown',function(e){
+    if (e.keyCode == 13 || e.which == 13) {
+        // Reload on enter
+        window.location.reload()
+    }
+    if (e.keyCode == 65 || e.which == 65) {
+        // Enable/Disable Automode when pressing A
+        automode = !automode;
+    }
+    if (e.keyCode == 68 || e.which == 68) {
+        // Enable/Disable debug when pressing D
+        debug = !debug;
+    }
+    keyState[e.keyCode || e.which] = true;
+}, true);
+window.addEventListener('keyup',function(e){
+    keyState[e.keyCode || e.which] = false;
+}, true);
+
+// start the game
+gameLoop.loop();
+</script>
+</body>
+</html>

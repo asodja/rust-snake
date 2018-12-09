@@ -1,0 +1,8 @@
+[package]
+name = "rust-snake"
+version = "0.1.0"
+authors = ["asodja <anze.36@gmail.com>"]
+
+[dependencies]
+ws = "0.7.9"
+crossbeam-channel = "0.2.6"
