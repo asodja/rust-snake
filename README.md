@@ -1,5 +1,4 @@
 # Rust Snake
----
 Server for multiplayer snake game written in [Rust](https://github.com/rust-lang/rust). It is my playground for trying out Rust and all it offers. 
 
 Server-client protocol is a simpler version of one described in [Slither.io-Protocol](https://github.com/ClitherProject/Slither.io-Protocol). 
